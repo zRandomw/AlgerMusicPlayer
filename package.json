@@ -86,7 +86,7 @@
     "howler": "^2.2.4",
     "lint-staged": "^15.2.10",
     "lodash": "^4.17.21",
-    "marked": "^15.0.4",
+    "marked": "^16.4.1",
     "naive-ui": "^2.41.0",
     "pinia": "^3.0.1",
     "pinyin-match": "^1.2.6",
