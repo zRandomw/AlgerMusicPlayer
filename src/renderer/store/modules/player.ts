@@ -414,7 +414,8 @@ const preloadNextSong = (nextSongUrl: string) => {
     );
     if (existingPreload) {
       console.log('该音频已在预加载列表中，跳过:', nextSongUrl);
-      return existingPreload;
+      // 不返回预加载实例，防止误播放
+      return;
     }
 
     const sound = new Howl({
@@ -423,6 +424,9 @@ const preloadNextSong = (nextSongUrl: string) => {
       preload: true,
       autoplay: false
     });
+
+    // 标记为预加载实例，防止被误用
+    (sound as any)._isPreloaded = true;
 
     preloadingSounds.value.push(sound);
 
@@ -440,10 +444,9 @@ const preloadNextSong = (nextSongUrl: string) => {
       }
     });
 
-    return sound;
+    // 不返回实例，避免被外部误用
   } catch (error) {
     console.error('预加载音频出错:', error);
-    return null;
   }
 };
 
@@ -509,7 +512,6 @@ export const usePlayerStore = defineStore('player', () => {
   const play = ref(false);
   const isPlay = ref(false);
   const playMusic = ref<SongResult>(getLocalStorageItem('currentPlayMusic', {} as SongResult));
-  const playMusicUrl = ref(getLocalStorageItem('currentPlayMusicUrl', ''));
   const playList = ref<SongResult[]>(getLocalStorageItem('playList', []));
   const playListIndex = ref(getLocalStorageItem('playListIndex', 0));
   const playMode = ref(getLocalStorageItem('playMode', 0));
@@ -650,7 +652,6 @@ export const usePlayerStore = defineStore('player', () => {
     audioService.pause();
     setTimeout(() => {
       playMusic.value = {} as SongResult;
-      playMusicUrl.value = '';
       playList.value = [];
       playListIndex.value = 0;
       originalPlayList.value = [];
@@ -693,9 +694,16 @@ export const usePlayerStore = defineStore('player', () => {
   const currentPlayListIndex = computed(() => playListIndex.value);
 
   const handlePlayMusic = async (music: SongResult, isPlay: boolean = true) => {
+    console.log('[handlePlayMusic] 开始播放音乐:', {
+      id: music.id,
+      name: music.name,
+      source: music.source,
+      hasUrl: !!music.playMusicUrl
+    });
+
     const currentSound = audioService.getCurrentSound();
     if (currentSound) {
-      console.log('主动停止并卸载当前音频实例');
+      console.log('[handlePlayMusic] 停止并卸载当前音频实例');
       currentSound.stop();
       currentSound.unload();
     }
@@ -703,32 +711,8 @@ export const usePlayerStore = defineStore('player', () => {
     // 保存原始歌曲数据
     const originalMusic = { ...music };
 
-    // 并行加载歌词和背景色，提高加载速度
-    const [lyrics, { backgroundColor, primaryColor }] = await Promise.all([
-      // 加载歌词
-      (async () => {
-        if (music.lyric && music.lyric.lrcTimeArray.length > 0) {
-          return music.lyric;
-        }
-        return await loadLrc(music.id);
-      })(),
-      // 获取背景色
-      (async () => {
-        if (music.backgroundColor && music.primaryColor) {
-          return { backgroundColor: music.backgroundColor, primaryColor: music.primaryColor };
-        }
-        return await getImageLinearBackground(getImgUrl(music?.picUrl, '30y30'));
-      })()
-    ]);
-
-    // 设置歌词和背景色
-    music.lyric = lyrics;
-    music.backgroundColor = backgroundColor;
-    music.primaryColor = primaryColor;
-    music.playLoading = true; // 设置加载状态
-
-    // 更新 playMusic，此时歌词已完全加载
-    playMusic.value = music;
+    // 设置加载状态
+    music.playLoading = true;
 
     // 更新播放相关状态
     play.value = isPlay;
@@ -760,19 +744,49 @@ export const usePlayerStore = defineStore('player', () => {
         playListIndex.value = songIndex;
       }
 
-      // 获取歌曲详情，包括URL
-      const updatedPlayMusic = await getSongDetail(originalMusic);
+      // 并行加载歌词、背景色和歌曲URL
+      const [lyrics, { backgroundColor, primaryColor }, updatedMusic] = await Promise.all([
+        // 加载歌词
+        (async () => {
+          if (music.lyric && music.lyric.lrcTimeArray.length > 0) {
+            return music.lyric;
+          }
+          return await loadLrc(music.id);
+        })(),
+        // 获取背景色
+        (async () => {
+          if (music.backgroundColor && music.primaryColor) {
+            return { backgroundColor: music.backgroundColor, primaryColor: music.primaryColor };
+          }
+          return await getImageLinearBackground(getImgUrl(music?.picUrl, '30y30'));
+        })(),
+        // 获取歌曲详情（包括URL）
+        getSongDetail(originalMusic)
+      ]);
 
-      // 保留已加载的歌词数据，不要被 getSongDetail 的返回值覆盖
-      updatedPlayMusic.lyric = lyrics;
+      // 组装最终的播放音乐对象（一次性更新）
+      const finalPlayMusic = {
+        ...updatedMusic,
+        lyric: lyrics,
+        backgroundColor,
+        primaryColor,
+        playLoading: false
+      };
 
-      playMusic.value = updatedPlayMusic;
-      playMusicUrl.value = updatedPlayMusic.playMusicUrl as string;
-      music.playMusicUrl = updatedPlayMusic.playMusicUrl as string;
+      // 一次性更新 playMusic.value
+      playMusic.value = finalPlayMusic;
+      music.playMusicUrl = finalPlayMusic.playMusicUrl as string;
+
+      console.log('[handlePlayMusic] playMusic状态已更新:', {
+        id: playMusic.value.id,
+        name: playMusic.value.name,
+        hasUrl: !!playMusic.value.playMusicUrl,
+        hasLyric: !!playMusic.value.lyric,
+        url: playMusic.value.playMusicUrl?.substring(0, 50) + '...'
+      });
 
       // 保存到本地存储
       localStorage.setItem('currentPlayMusic', JSON.stringify(playMusic.value));
-      localStorage.setItem('currentPlayMusicUrl', playMusicUrl.value);
       localStorage.setItem('isPlaying', play.value.toString());
 
       // 预加载下一首歌曲
@@ -921,7 +935,6 @@ export const usePlayerStore = defineStore('player', () => {
 
       // 记录到本地存储，保持一致性
       localStorage.setItem('currentPlayMusic', JSON.stringify(playMusic.value));
-      localStorage.setItem('currentPlayMusicUrl', playMusicUrl.value);
       if (success) {
         isPlay.value = true;
       }
@@ -952,7 +965,6 @@ export const usePlayerStore = defineStore('player', () => {
       // 设置为播放意图
       userPlayIntent.value = true;
       localStorage.setItem('currentPlayMusic', JSON.stringify(playMusic.value));
-      localStorage.setItem('currentPlayMusicUrl', playMusicUrl.value);
     }
   };
 
@@ -1482,7 +1494,6 @@ export const usePlayerStore = defineStore('player', () => {
         play.value = false;
         isPlay.value = false;
         playMusic.value = {} as SongResult;
-        playMusicUrl.value = '';
         localStorage.removeItem('currentPlayMusic');
         localStorage.removeItem('currentPlayMusicUrl');
         localStorage.removeItem('isPlaying');
@@ -1521,15 +1532,36 @@ export const usePlayerStore = defineStore('player', () => {
     localStorage.setItem('favoriteList', JSON.stringify(favoriteList.value));
   };
 
+  // 状态校验函数：验证播放状态一致性
+  const validatePlayState = () => {
+    const audioTrack = audioService.getCurrentTrack();
+    if (audioTrack && playMusic.value) {
+      const isMatched = audioTrack.id === playMusic.value.id;
+      if (!isMatched) {
+        console.warn('[状态校验] 播放状态不一致!', {
+          audioServiceTrack: { id: audioTrack.id, name: audioTrack.name },
+          playerStoreTrack: { id: playMusic.value.id, name: playMusic.value.name }
+        });
+      }
+      return isMatched;
+    }
+    return true;
+  };
+
   // 修改 playAudio 函数中的错误处理逻辑，避免在操作锁问题时频繁尝试播放
   const playAudio = async () => {
-    if (!playMusicUrl.value || !playMusic.value) return null;
+    if (!playMusic.value?.playMusicUrl || !playMusic.value) return null;
 
     try {
       // 保存当前播放状态
       const shouldPlay = play.value;
-      console.log('播放音频，当前播放状态:', shouldPlay ? '播放' : '暂停');
-      console.log('playMusic.value', playMusic.value.name, playMusic.value.id);
+      console.log('[playAudio] 播放音频，当前播放状态:', shouldPlay ? '播放' : '暂停');
+      console.log('[playAudio] playMusic:', {
+        id: playMusic.value.id,
+        name: playMusic.value.name,
+        source: playMusic.value.source,
+        url: playMusic.value.playMusicUrl?.substring(0, 50) + '...'
+      });
 
       // 检查是否有保存的进度
       let initialPosition = 0;
@@ -1541,7 +1573,7 @@ export const usePlayerStore = defineStore('player', () => {
       // 对于B站视频，检查URL是否有效
       if (
         playMusic.value.source === 'bilibili' &&
-        (!playMusicUrl.value || playMusicUrl.value === 'undefined')
+        (!playMusic.value.playMusicUrl || playMusic.value.playMusicUrl === 'undefined')
       ) {
         console.log('B站视频URL无效，尝试重新获取');
 
@@ -1554,8 +1586,10 @@ export const usePlayerStore = defineStore('player', () => {
             );
 
             // 设置URL到播放器状态
-            (playMusic.value as any).playMusicUrl = proxyUrl;
-            playMusicUrl.value = proxyUrl;
+            playMusic.value = {
+              ...playMusic.value,
+              playMusicUrl: proxyUrl
+            };
           } catch (error) {
             console.error('获取B站音频URL失败:', error);
             message.error(i18n.global.t('player.playFailed'));
@@ -1567,7 +1601,7 @@ export const usePlayerStore = defineStore('player', () => {
       // 播放新音频，传递是否应该播放的状态
       console.log('调用audioService.play，播放状态:', shouldPlay);
       const newSound = await audioService.play(
-        playMusicUrl.value,
+        playMusic.value.playMusicUrl,
         playMusic.value,
         shouldPlay,
         initialPosition || 0
@@ -1585,7 +1619,11 @@ export const usePlayerStore = defineStore('player', () => {
 
       // 确保状态与 localStorage 同步
       localStorage.setItem('currentPlayMusic', JSON.stringify(playMusic.value));
-      localStorage.setItem('currentPlayMusicUrl', playMusicUrl.value);
+
+      // 验证播放状态一致性
+      setTimeout(() => {
+        validatePlayState();
+      }, 500);
 
       return newSound;
     } catch (error) {
@@ -1751,7 +1789,6 @@ export const usePlayerStore = defineStore('player', () => {
     play,
     isPlay,
     playMusic,
-    playMusicUrl,
     playList,
     playListIndex,
     playMode,

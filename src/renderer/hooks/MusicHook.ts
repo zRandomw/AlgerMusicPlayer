@@ -532,8 +532,8 @@ const setupAudioListeners = () => {
       }
 
       // 重新播放当前歌曲
-      if (getPlayerStore().playMusicUrl && playMusic.value) {
-        const newSound = await audioService.play(getPlayerStore().playMusicUrl, playMusic.value);
+      if (playMusic.value?.playMusicUrl && playMusic.value) {
+        const newSound = await audioService.play(playMusic.value.playMusicUrl, playMusic.value);
         sound.value = newSound as Howl;
         setupAudioListeners();
       } else {
@@ -1058,9 +1058,12 @@ audioService.on('url_expired', async (expiredTrack) => {
 
         console.log('成功获取新的B站URL:', newUrl);
 
-        // 更新存储
-        (expiredTrack as any).playMusicUrl = newUrl;
-        getPlayerStore().playMusicUrl = newUrl;
+        // 更新存储（使用不可变更新）
+        expiredTrack.playMusicUrl = newUrl;
+        getPlayerStore().playMusic = {
+          ...getPlayerStore().playMusic,
+          playMusicUrl: newUrl
+        };
 
         // 重新播放并设置进度
         const newSound = await audioService.play(newUrl, expiredTrack);
@@ -1093,9 +1096,12 @@ audioService.on('url_expired', async (expiredTrack) => {
         if (newUrl) {
           console.log('成功获取新的网易云URL:', newUrl);
 
-          // 更新存储
-          (expiredTrack as any).playMusicUrl = newUrl;
-          getPlayerStore().playMusicUrl = newUrl;
+          // 更新存储（使用不可变更新）
+          expiredTrack.playMusicUrl = newUrl;
+          getPlayerStore().playMusic = {
+            ...getPlayerStore().playMusic,
+            playMusicUrl: newUrl
+          };
 
           // 重新播放并设置进度
           const newSound = await audioService.play(newUrl, expiredTrack);
